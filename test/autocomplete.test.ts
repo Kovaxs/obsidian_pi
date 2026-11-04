@@ -160,6 +160,37 @@ test("delegates command arguments and file attachment insertion", async () => {
 	);
 });
 
+test("inserts full paths to distinguish notes with the same basename", async () => {
+	const duplicateFiles: VaultFile[] = ["Projects/New idea.md", "Archive/New idea.md"].map((path) => ({
+		path, mtime: 1, tags: [], headings: [],
+	}));
+	const provider = await fixture([], duplicateFiles);
+	const line = '@@obs@"New idea';
+	const suggestions = await provider.getSuggestions([line], 0, line.length, { signal: new AbortController().signal });
+	assert.deepEqual(suggestions?.items.map((item) => item.value).sort(), [
+		'@@obs@"Archive/New idea"', '@@obs@"Projects/New idea"',
+	]);
+});
+
+test("heading suggestions respect an exact root path when basenames are duplicated", async () => {
+	const duplicateFiles: VaultFile[] = ["note.md", "Projects/note.md"].map((path, index) => ({
+		path, mtime: 1, tags: [], headings: [[1, index === 0 ? "Root heading" : "Nested heading", 0]],
+	}));
+	const provider = await fixture([], duplicateFiles);
+	const line = "@@obs@note#";
+	const suggestions = await provider.getSuggestions([line], 0, line.length, {
+		signal: new AbortController().signal, force: true,
+	});
+	assert.deepEqual(suggestions?.items.map((item) => item.label), ["Root heading"]);
+});
+
+test("keeps earlier selected paths quoted when completing multiple files", async () => {
+	const provider = await fixture();
+	const line = '@@obs@"uv dockerfile",net';
+	const suggestions = await provider.getSuggestions([line], 0, line.length, { signal: new AbortController().signal });
+	assert.equal(suggestions?.items[0]?.value, '@@obs@"uv dockerfile",networking');
+});
+
 function baseProvider(): AutocompleteProvider {
 	return {
 		async getSuggestions() {

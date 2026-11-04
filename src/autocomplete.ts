@@ -4,7 +4,6 @@ import { visibleFiles } from "./config.ts";
 import {
 	findHeadingNodes,
 	flattenHeadingTree,
-	noteName,
 	runStages,
 	suggestFiles,
 	suggestTags,
@@ -116,7 +115,7 @@ function fileItems(
 	completedFiles: string[] = [],
 ): AutocompleteItem[] {
 	return suggestFiles(selection, query).map((file) => {
-		const files = [...completedFiles, formatName(noteName(file.path))].join(",");
+		const files = [...completedFiles.map(formatName), formatName(file.path.replace(/\.md$/, ""))].join(",");
 		return {
 			value: `${renderChain(chain.keyword, completedSegments)}@${files}`,
 			label: file.path.replace(/\.md$/, ""),

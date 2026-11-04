@@ -42,11 +42,17 @@ export function narrow(selection: Selection, segment: Segment): Selection {
 		};
 	}
 	if (segment.kind === "files") {
-		const names = new Set(segment.files.filter(Boolean).map((name) => name.toLocaleLowerCase()));
-		return {
-			...selection,
-			files: selection.files.filter((file) => fileNames(file).some((name) => names.has(name.toLocaleLowerCase()))),
-		};
+		const matches = new Set<VaultFile>();
+		for (const name of segment.files.filter(Boolean)) {
+			const normalized = name.toLocaleLowerCase();
+			const path = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+			const exact = selection.files.find((file) => file.path.toLocaleLowerCase() === path);
+			const candidates = exact ? [exact] : selection.files.filter((file) =>
+				fileNames(file).some((candidate) => candidate.toLocaleLowerCase() === normalized),
+			);
+			for (const file of candidates) matches.add(file);
+		}
+		return { ...selection, files: selection.files.filter((file) => matches.has(file)) };
 	}
 	return { ...selection, sectionPath: segment.path.filter(Boolean) };
 }

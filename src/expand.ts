@@ -1,9 +1,10 @@
-import { findChainSpans, parseChain } from "./chain.ts";
+import { join, posix } from "node:path";
+import { findChainSpans, parseChain, type Chain } from "./chain.ts";
 import { visibleFiles } from "./config.ts";
 import type { ObsidianCli } from "./obsidian-cli.ts";
 import { findHeadingNodes, runStages } from "./stages.ts";
 import type { VaultIndexStore } from "./vault-index.ts";
-import type { Heading, VaultFile } from "./types.ts";
+import type { Heading, VaultFile, VaultIndex } from "./types.ts";
 
 export const DEFAULT_MAX_NOTE_BYTES = 50_000;
 export const DEFAULT_MAX_CHAIN_BYTES = 100_000;
@@ -31,13 +32,16 @@ export interface ExpansionOptions {
 	maxChainBytes?: number;
 }
 
+type NoteReference = { kind: "existing"; file: VaultFile; path: string } | { kind: "new"; path: string };
+
 interface ExpansionBlock {
-	path: string;
-	section?: string;
-	text: string;
+	reference: NoteReference;
+	sectionPath: string[];
+	heading?: Heading;
+	text?: string;
 }
 
-/** Replaces every resolvable vault chain with its selected note content. */
+/** Resolves chains to note paths, including content only for existing selected sections. */
 export async function expandPrompt(
 	input: string,
 	vaults: VaultProvider,
@@ -77,59 +81,104 @@ async function expandChain(
 	const store = vaults.getStore(chain.keyword);
 	if (!store) throw new Error(`unknown vault keyword "${chain.keyword}"; run /obsidian-setup`);
 	const index = await store.ensureIndex();
-	const selection = runStages(visibleFiles(index.files, vaults.getExcludedFolders(chain.keyword)), chain.segments);
-	if (selection.files.length === 0) throw new Error("no notes match this chain");
-
+	const references = resolveReferences(index, chain, vaults.getExcludedFolders(chain.keyword));
+	const sectionPath = chain.segments.find((segment) => segment.kind === "section")?.path ?? [];
 	const maxNoteBytes = options.maxNoteBytes ?? DEFAULT_MAX_NOTE_BYTES;
 	const maxChainBytes = options.maxChainBytes ?? DEFAULT_MAX_CHAIN_BYTES;
 	let chainBytes = 0;
 	let truncated = false;
 	const rendered: string[] = [];
 
-	outer: for (const file of selection.files) {
-		const content = await cli.readNote(index.vault, file.path);
+	outer: for (const reference of references) {
+		if (chainBytes >= maxChainBytes) {
+			truncated = true;
+			break;
+		}
+		const blocks = await selectFileBlocks(reference, sectionPath, index.vault, cli);
 		let noteBytes = 0;
-		for (const block of selectFileBlocks(file, content, selection.sectionPath)) {
-			const header = renderHeader(raw, block);
+		for (const block of blocks) {
+			const header = renderHeader(raw, index, block);
 			const endMarker = "\n[End Obsidian note]";
-			const available = maxChainBytes - chainBytes - byteLength(header) - byteLength(endMarker);
-			if (available <= 0 || noteBytes >= maxNoteBytes) {
+			const separator = rendered.length > 0 ? "\n\n" : "";
+			const available = maxChainBytes - chainBytes - byteLength(separator + header + endMarker);
+			if (available < 0 || (block.text !== undefined && noteBytes >= maxNoteBytes)) {
 				truncated = true;
 				break outer;
 			}
 			const limit = Math.min(maxNoteBytes - noteBytes, available);
-			const truncatedContent = truncateUtf8(block.text, limit);
+			const truncatedContent = truncateUtf8(block.text ?? "", limit);
 			truncated ||= truncatedContent.truncated;
 			noteBytes += byteLength(truncatedContent.text);
-			const renderedBlock = `${header}${truncatedContent.text}${endMarker}`;
+			const renderedBlock = `${separator}${header}${truncatedContent.text}${endMarker}`;
 			rendered.push(renderedBlock);
 			chainBytes += byteLength(renderedBlock);
 			if (truncatedContent.truncated) break;
-			if (chainBytes >= maxChainBytes) {
-				truncated = true;
-				break outer;
-			}
 		}
 	}
 
-	let text = rendered.join("\n\n");
-	if (truncated) text += `\n\n[Obsidian expansion truncated: ${maxNoteBytes} bytes per note, ${maxChainBytes} bytes per chain]`;
-	return { text, files: selection.files.length, blocks: rendered.length, truncated };
+	let text = rendered.join("");
+	if (truncated) text += `\n\n[Obsidian expansion truncated: ${maxNoteBytes} content bytes per note, ${maxChainBytes} bytes per chain]`;
+	return { text, files: references.length, blocks: rendered.length, truncated };
 }
 
-function selectFileBlocks(file: VaultFile, content: string, sectionPath: string[]): ExpansionBlock[] {
-	if (sectionPath.length === 0) return [{ path: file.path, text: content.trimEnd() }];
+function resolveReferences(index: VaultIndex, chain: Chain, excludeFolders: string[] = []): NoteReference[] {
+	const fileStage = chain.segments.find((segment) => segment.kind === "files");
+	if (!fileStage) {
+		const selection = runStages(visibleFiles(index.files, excludeFolders), chain.segments);
+		if (selection.files.length === 0) throw new Error("no notes match this chain");
+		return selection.files.map((file) => ({ kind: "existing", file, path: file.path }));
+	}
+
+	const references = new Map<string, NoteReference>();
+	const tags = chain.segments.filter((segment) => segment.kind === "tags");
+	for (const name of fileStage.files) {
+		const path = normalizeReferencePath(name);
+		const matches = runStages(index.files, [{ kind: "files", files: [path] }]).files;
+		if (matches.length > 0) {
+			const selected = runStages(visibleFiles(matches, excludeFolders), tags).files;
+			if (selected.length === 0) throw new Error(`no notes match "${name}" with these tags and folder exclusions`);
+			for (const file of selected) references.set(file.path, { kind: "existing", file, path: file.path });
+		} else {
+			// Typed destinations are user input: keep them inside the vault and honor keyword exclusions.
+			if (excludeFolders.some((folder) => path.startsWith(`${folder}/`))) {
+				throw new Error(`no notes match "${name}": destination is in an excluded folder`);
+			}
+			if (tags.length > 0) throw new Error(`no notes match "${name}": a new destination cannot match tag filters`);
+			references.set(path, { kind: "new", path });
+		}
+	}
+	return [...references.values()];
+}
+
+function normalizeReferencePath(name: string): string {
+	const path = name.replace(/\\/g, "/");
+	const normalized = posix.normalize(path);
+	// Unlike indexed paths, typed destinations have not passed through Obsidian's vault API.
+	if (
+		path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.split("/").includes("..") ||
+		normalized === "." || normalized.endsWith("/") || posix.basename(normalized) === ".md"
+	) {
+		throw new Error("note paths must name a file relative to the vault and cannot contain ..");
+	}
+	return normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+}
+
+async function selectFileBlocks(
+	reference: NoteReference,
+	sectionPath: string[],
+	vault: string,
+	cli: ObsidianCli,
+): Promise<ExpansionBlock[]> {
+	if (reference.kind === "new" || sectionPath.length === 0) return [{ reference, sectionPath }];
+	const file = reference.file;
 	const matches = findHeadingNodes(file, sectionPath);
-	if (matches.length === 0) throw new Error(`section "${sectionPath.join(" > ")}" not found in ${file.path}`);
+	if (matches.length === 0) return [{ reference, sectionPath }];
+	const content = await cli.readNote(vault, file.path);
 	const lines = content.split("\n");
 	return matches.map((match) => {
 		const heading = match.heading;
 		const end = findSectionEnd(file.headings, heading, lines.length);
-		return {
-			path: file.path,
-			section: sectionPath.join(" > "),
-			text: lines.slice(heading[2], end).join("\n").trimEnd(),
-		};
+		return { reference, sectionPath, heading, text: lines.slice(heading[2], end).join("\n").trimEnd() };
 	});
 }
 
@@ -142,15 +191,29 @@ function findSectionEnd(headings: Heading[], selected: Heading, lineCount: numbe
 	return lineCount;
 }
 
-function renderHeader(raw: string, block: ExpansionBlock): string {
-	const section = block.section ? `\nSection: ${block.section}` : "";
-	return `[Obsidian note]\nReference: ${raw}\nPath: ${block.path}${section}\n\n`;
+function renderHeader(raw: string, index: VaultIndex, block: ExpansionBlock): string {
+	const lines = [
+		"[Obsidian note]",
+		`Reference: ${raw}`,
+		`Vault: ${index.vault}`,
+		`Vault path: ${index.vaultPath}`,
+		`Path: ${block.reference.path}`,
+		`Absolute path: ${join(index.vaultPath, block.reference.path)}`,
+		`Note: ${block.reference.kind === "existing" ? "found in index" : "not found in index (new destination)"}`,
+	];
+	if (block.sectionPath.length > 0) {
+		lines.push(`Section: ${block.sectionPath.join(" > ")}`);
+		if (block.heading) lines.push(`Line: ${block.heading[2] + 1}`, `Heading level: H${block.heading[0]}`);
+		else lines.push("Section status: not found in index (intended heading path)");
+	}
+	lines.push(block.text === undefined ? "Content: not included" : "Content:");
+	return `${lines.join("\n")}\n\n`;
 }
 
 function truncateUtf8(text: string, maxBytes: number): { text: string; truncated: boolean } {
 	if (byteLength(text) <= maxBytes) return { text, truncated: false };
 	const encoded = new TextEncoder().encode(text);
-	const truncated = new TextDecoder().decode(encoded.slice(0, Math.max(0, maxBytes)));
+	const truncated = new TextDecoder().decode(encoded.slice(0, Math.max(0, maxBytes)), { stream: true });
 	return { text: truncated, truncated: true };
 }
 

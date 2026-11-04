@@ -45,12 +45,6 @@ export class ObsidianCli {
 		return result.stdout;
 	}
 
-	async appendNote(vault: string, path: string, content: string, heading?: string): Promise<void> {
-		const args = ["append", `path=${path}`, `content=${content}`];
-		if (heading) args.push(`heading=${heading}`);
-		await this.runVault(vault, args);
-	}
-
 	private async getVaultPath(vault: string): Promise<string> {
 		const cached = this.vaultPaths.get(vault);
 		if (cached) return cached;

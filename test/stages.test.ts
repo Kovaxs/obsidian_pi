@@ -45,6 +45,19 @@ test("file stages match exact names case-insensitively and accept multiple notes
 	assert.equal(noteName(selection.files[0]?.path ?? ""), "uv dockerfile");
 });
 
+test("exact paths take precedence over matching basenames", () => {
+	const duplicates: VaultFile[] = ["note.md", "Projects/note.md", "Archive/note.md"].map((path) => ({
+		path, mtime: 1, tags: [], headings: [],
+	}));
+	for (const name of ["note", "NOTE.md", "Projects/note", "Archive/note.md"]) {
+		const selection = runStages(duplicates, [{ kind: "files", files: [name] }]);
+		assert.equal(selection.files.length, 1);
+		assert.equal(selection.files[0]?.path.toLowerCase().replace(/\.md$/, ""), name.toLowerCase().replace(/\.md$/, ""));
+	}
+	const basenames = runStages(duplicates.slice(1), [{ kind: "files", files: ["note"] }]);
+	assert.equal(basenames.files.length, 2);
+});
+
 test("file suggestions use fuzzy tokens", () => {
 	const suggestions = suggestFiles({ files, sectionPath: [] }, "uv dock");
 	assert.equal(suggestions[0]?.path, "docker/uv dockerfile.md");

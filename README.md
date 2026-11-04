@@ -1,8 +1,8 @@
 # pi-obsidian
 
-A pi extension for user-directed Obsidian reads and writes. Type a vault chain in the prompt, navigate it with autocomplete, and pi replaces it with the referenced Markdown before the model sees the prompt.
+A pi extension for human-assisted Obsidian references. Type a vault chain in the prompt and navigate files, tags, and headings with autocomplete. On submit, pi gives the agent the resolved vault and file paths. Selecting an existing heading also includes that section's Markdown.
 
-The extension never registers a vault-writing agent tool. The only write path is the reviewed `/obs-save` command.
+The surrounding instruction tells the agent what to do: read, summarize, or write. The extension does not interpret that instruction or write notes. The agent uses the Obsidian skill for reads and writes.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ Keywords may contain letters, numbers, `_`, and `-`. Multiple keywords can point
 
 ### Excluded folders
 
-The optional `excludeFolders` list hides a folder and all its descendants from file, tag, and heading suggestions, prompt expansion (including explicitly typed references), and `/obs-save`. Omit it or use `[]` to include every folder.
+The optional `excludeFolders` list hides a folder and all its descendants from file, tag, and heading suggestions, prompt expansion (including explicitly typed references), and new destination references. Omit it or use `[]` to include every folder.
 
 Paths are relative to the vault root and case-sensitive. Use `Fleeting Notes` for the root folder or `Projects/Fleeting Notes` for a nested folder. `Fleeting Notes` does not hide `Fleeting Notes Archive` or a note named `Fleeting Notes.md`. These are literal folder paths, not glob patterns. Absolute paths and `..` are rejected; trailing slashes and a leading `./` are accepted.
 
@@ -55,7 +55,7 @@ Exclusions apply per keyword, so another keyword for the same vault can use a di
 Every stage is optional:
 
 - `+python,docker` requires both tags. `+python` also matches `python/uv`. After a parent tag, type `/` for its direct children. `▸` marks tags with children.
-- `@"uv dockerfile"` selects a note by exact name after completion. While typing, names and paths are fuzzy-matched. Separate several names with commas.
+- `@"docker/uv dockerfile"` selects a note by vault-relative path. While typing, names and paths are fuzzy-matched; completion inserts the full path without `.md` to distinguish duplicate note names. Manually typed names are also accepted; an exact vault-relative path takes precedence over basename matches. Separate several names with commas.
 - `#Setup##Install` selects a heading path. Hash count is tree depth, not the Markdown H1/H2 level, so skipped heading levels work.
 
 A space outside double quotes ends a chain. Completion quotes names containing spaces or grammar characters. Tab reopens completion after a quoted name. Immediately after `#`, Tab shows the whole heading tree with indentation and inserts the full path to the selected heading.
@@ -68,13 +68,19 @@ Compare @@obs+python,docker
 Use the install steps in @@obs@"uv dockerfile"#Setup##Install
 ```
 
-A chain with no file stage can select many notes. A bare `@@obs` selects the entire vault; use it cautiously.
+A chain with no file stage can select many notes. A bare `@@obs` returns paths for every visible note, not their contents.
 
-## Expansion format and limits
+## Resolved references and section context
 
-Each block includes the original chain, note path, optional section path, content, and an end marker. Sections include their heading and stop before the next heading of the same or higher Markdown level.
+Each block includes the original chain, configured vault name, vault root, vault-relative note path (including `.md`), absolute file path, and whether the note was found in the index.
 
-Expansion is capped at **50,000 UTF-8 bytes per note** and **100,000 bytes per chain**. Truncation adds an explicit marker. Unresolved or malformed chains remain unchanged and produce an error notice.
+- **File only:** includes path metadata, without reading or inserting the note's content. The agent can read it through the Obsidian skill.
+- **Existing heading:** also includes its 1-based line number, Markdown heading level, and section content. The content includes the selected heading and stops before the next heading of the same or higher Markdown level.
+- **New note or missing heading:** preserves the explicit destination and marks it as not found in the index. It does not read unrelated content, create anything, or treat the reference as permission to write.
+
+For a new destination, type its vault-relative path; `.md` is added if omitted. Absolute paths, `..`, folder-only targets, and destinations in excluded folders are rejected. Tags only filter existing notes; a missing note cannot satisfy a tag filter. Unknown vault keywords, malformed chains, and failed searches remain unchanged and produce an error notice.
+
+Selected section content is capped at **50,000 UTF-8 bytes per note**. The complete reference blocks, including metadata, are capped at **100,000 bytes per chain**. Truncation adds an explicit marker. Index status and heading locations describe the cached index; the skill should check the current note before writing.
 
 ## Cache and refresh
 
@@ -82,21 +88,19 @@ Indexes contain note paths, modification times, inline and frontmatter tags, and
 
 Cached data is available immediately. Startup refreshes it in the background, and a recursive vault watcher batches changes for 250 ms before rebuilding through `obsidian eval`. If Obsidian is unavailable, the last cache remains usable and pi shows a warning. If metadata predates a file modification, the extension retries once.
 
-## Reviewed writes
+## Read and write instructions
 
-First ask the agent for a draft, then run:
-
-```text
-/obs-save @@obs@"note"#Section
-```
-
-The review editor opens with the latest assistant text. Edit it and submit, then confirm the exact vault, note, and section. To supply draft text directly:
+Use ordinary prompts with the same reference syntax:
 
 ```text
-/obs-save @@obs@"note"#Section Text to append
+Read @@obs@"Projects/New idea"
+Read @@obs@"Projects/New idea"#Title
+Write to @@obs@"Projects/New idea"#Title under an H2 heading "Second title"
 ```
 
-The target must name exactly one existing note with `@`. Tags and a section may further qualify it. The command uses `obsidian append`; cancellation or a failed confirmation performs no write.
+The first prompt supplies the file path for the agent to read. The second also brings the existing `Title` section into context. The third supplies the destination and any existing section content; the agent uses the Obsidian skill to carry out the write. The note or heading may be new.
+
+There are no note-saving or note-creation commands in this extension.
 
 ## Development
 

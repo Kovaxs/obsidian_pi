@@ -3,7 +3,6 @@ import { createObsidianAutocomplete } from "./autocomplete.ts";
 import { loadConfig, saveConfig, validateKeyword, type VaultConfig } from "./config.ts";
 import { expandPrompt } from "./expand.ts";
 import { ObsidianCli } from "./obsidian-cli.ts";
-import { parseSaveArguments, resolveSaveTarget } from "./save.ts";
 import { VaultIndexStore } from "./vault-index.ts";
 
 export default function (pi: ExtensionAPI): void {
@@ -32,37 +31,6 @@ export default function (pi: ExtensionAPI): void {
 		stores.set(keyword, store);
 		vaultConfigs.set(keyword, config);
 	}
-
-	pi.registerCommand("obs-save", {
-		description: "Append reviewed text to an explicitly named Obsidian note",
-		handler: async (args, ctx) => {
-			if (!ctx.hasUI) {
-				ctx.ui.notify("Obsidian save requires interactive review", "error");
-				return;
-			}
-			try {
-				const request = parseSaveArguments(args.trim());
-				const keyword = request.chain.slice(2).split(/[+@#]/, 1)[0] ?? "";
-				const store = stores.get(keyword);
-				if (!store) throw new Error(`Unknown vault keyword "${keyword}"; run /obsidian-setup`);
-				const target = resolveSaveTarget(await store.ensureIndex(), request.chain, vaults.getExcludedFolders(keyword));
-				const draft = request.draft ?? latestAssistantText(ctx);
-				const location = `${target.vault}/${target.file.path}${target.sectionPath.length > 0 ? ` — ${target.sectionPath.join(" > ")}` : ""}`;
-				const content = await ctx.ui.editor(`Review text to append to ${location}`, draft);
-				if (content === undefined) return;
-				if (!content.trim()) {
-					ctx.ui.notify("Obsidian save cancelled: text is empty", "warning");
-					return;
-				}
-				if (!(await ctx.ui.confirm("Append to Obsidian?", location))) return;
-				await cli.appendNote(target.vault, target.file.path, content, target.sectionPath.at(-1));
-				await store.refresh();
-				ctx.ui.notify(`Appended reviewed text to ${location}`, "info");
-			} catch (error) {
-				ctx.ui.notify(`Obsidian save failed: ${errorMessage(error)}`, "error");
-			}
-		},
-	});
 
 	pi.registerCommand("obsidian-setup", {
 		description: "Map a keyword to an Obsidian vault",
@@ -122,7 +90,7 @@ export default function (pi: ExtensionAPI): void {
 			for (const error of result.errors) ctx.ui.notify(`Obsidian: ${error}`, "error");
 			for (const change of result.changes) {
 				const suffix = change.truncated ? " (truncated)" : "";
-				ctx.ui.notify(`Obsidian: expanded ${change.blocks} block(s) from ${change.files} note(s)${suffix}`, "info");
+				ctx.ui.notify(`Obsidian: resolved ${change.files} note reference(s) into ${change.blocks} block(s)${suffix}`, "info");
 			}
 		}
 		if (result.changes.length === 0) return { action: "continue" };
@@ -132,15 +100,4 @@ export default function (pi: ExtensionAPI): void {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function latestAssistantText(ctx: ExtensionContext): string {
-	for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		return entry.message.content
-			.filter((part) => part.type === "text")
-			.map((part) => part.text)
-			.join("\n");
-	}
-	return "";
 }
