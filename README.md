@@ -6,7 +6,7 @@ The surrounding instruction tells the agent what to do: read, summarize, or writ
 
 ## TODO
 
-- [ ] Maybe with skill or with other manner create a template for file writing
+- [ ] Perhaps we could use a skill or another method to create a file-writing template.
 
 ## Requirements
 
