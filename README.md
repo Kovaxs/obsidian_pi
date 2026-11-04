@@ -13,7 +13,13 @@ The surrounding instruction tells the agent what to do: read, summarize, or writ
 ## Install
 
 ```sh
-pi install git:github.com/YOUR_USER/pi-obsidian
+pi install git:github.com/Kovaxs/obsidian_pi
+```
+
+Older pi versions can use the HTTPS URL, which is treated as a git source:
+
+```sh
+pi install https://github.com/Kovaxs/obsidian_pi
 ```
 
 For a local checkout:
