@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createObsidianAutocomplete } from "./autocomplete.ts";
 import { expandPrompt } from "./expand.ts";
 import { ObsidianCli } from "./obsidian-cli.ts";
 import { VaultIndexStore } from "./vault-index.ts";
@@ -6,6 +7,12 @@ import { VaultIndexStore } from "./vault-index.ts";
 export default function (pi: ExtensionAPI): void {
 	const cli = new ObsidianCli((command, args, options) => pi.exec(command, args, options));
 	const stores = new Map<string, VaultIndexStore>();
+
+	pi.on("session_start", (_event, ctx) => {
+		ctx.ui.addAutocompleteProvider((current) =>
+			createObsidianAutocomplete(current, { getStore: (keyword) => stores.get(keyword) }),
+		);
+	});
 
 	pi.on("session_shutdown", () => {
 		for (const store of stores.values()) store.stop();
