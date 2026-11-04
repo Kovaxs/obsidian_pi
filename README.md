@@ -13,19 +13,7 @@ The surrounding instruction tells the agent what to do: read, summarize, or writ
 ## Install
 
 ```sh
-pi install git:github.com/Kovaxs/obsidian_pi
-```
-
-Older pi versions can use the HTTPS URL, which is treated as a git source:
-
-```sh
 pi install https://github.com/Kovaxs/obsidian_pi
-```
-
-For a local checkout:
-
-```sh
-pi install /Users/kovaxs/workspace/obsidian_pi
 ```
 
 Run `/obsidian-setup`, choose a vault, and choose a keyword such as `obs`. The command writes `~/.config/pi-obsidian/config.json` (respecting `XDG_CONFIG_HOME`):
