@@ -43,6 +43,10 @@ export function createObsidianAutocomplete(
 			return { prefix: span.raw, items };
 		},
 		applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+			// Pi owns slash restoration and attachment spacing for delegated completions.
+			if (!prefix.startsWith("@@") || !item.value.startsWith("@@")) {
+				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+			}
 			const line = lines[cursorLine] ?? "";
 			const start = cursorCol - prefix.length;
 			if (start < 0 || line.slice(start, cursorCol) !== prefix) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
+import { CombinedAutocompleteProvider, type AutocompleteItem, type AutocompleteProvider } from "@earendil-works/pi-tui";
 import { createObsidianAutocomplete } from "../src/autocomplete.ts";
 import { ObsidianCli } from "../src/obsidian-cli.ts";
 import { VaultIndexStore } from "../src/vault-index.ts";
@@ -86,6 +86,52 @@ test("delegates non-vault autocomplete", async () => {
 	const provider = await fixture();
 	const suggestions = await provider.getSuggestions(["@src"], 0, 4, { signal: new AbortController().signal });
 	assert.equal(suggestions?.items[0]?.value, "delegated");
+});
+
+test("preserves slash-command completion through the real pi provider", async () => {
+	const current = new CombinedAutocompleteProvider(
+		[{ name: "reload" }, { name: "obsidian-setup" }],
+		process.cwd(),
+	);
+	const provider = createObsidianAutocomplete(current, { getStore: () => undefined });
+	for (const line of ["/", "/rel", "  /rel", "/obsidian-s"]) {
+		const suggestions = await provider.getSuggestions([line], 0, line.length, {
+			signal: new AbortController().signal,
+		});
+		assert.ok(suggestions);
+		const item = suggestions.items[0];
+		assert.ok(item);
+		const expected = current.applyCompletion([line], 0, line.length, item, suggestions.prefix);
+		const actual = provider.applyCompletion([line], 0, line.length, item, suggestions.prefix);
+		assert.deepEqual(actual, expected);
+		assert.ok(actual.lines[0]?.trimStart().startsWith("/"));
+		assert.ok(actual.lines[0]?.endsWith(" "));
+	}
+});
+
+test("delegates command arguments and file attachment insertion", async () => {
+	const current = new CombinedAutocompleteProvider(
+		[{ name: "deploy", getArgumentCompletions: () => [{ value: "production", label: "production" }] }],
+		process.cwd(),
+	);
+	const provider = createObsidianAutocomplete(current, { getStore: () => undefined });
+	const line = "/deploy pro";
+	const suggestions = await provider.getSuggestions([line], 0, line.length, {
+		signal: new AbortController().signal,
+	});
+	assert.ok(suggestions);
+	const item = suggestions.items[0];
+	assert.ok(item);
+	assert.deepEqual(
+		provider.applyCompletion([line], 0, line.length, item, suggestions.prefix),
+		current.applyCompletion([line], 0, line.length, item, suggestions.prefix),
+	);
+
+	const attachment = { value: "@src/index.ts", label: "index.ts" };
+	assert.deepEqual(
+		provider.applyCompletion(["Read @src"], 0, 9, attachment, "@src"),
+		current.applyCompletion(["Read @src"], 0, 9, attachment, "@src"),
+	);
 });
 
 function baseProvider(): AutocompleteProvider {
