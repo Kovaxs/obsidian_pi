@@ -1,0 +1,25 @@
+{
+  "name": "pi-obsidian",
+  "version": "0.1.0",
+  "description": "User-directed Obsidian vault navigation and prompt expansion for pi",
+  "type": "module",
+  "keywords": ["pi-package", "obsidian"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}
