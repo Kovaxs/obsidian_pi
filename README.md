@@ -2,7 +2,11 @@
 
 A pi extension for human-assisted Obsidian references. Type a vault chain in the prompt and navigate files, tags, and headings with autocomplete. On submit, pi gives the agent the resolved vault and file paths. Selecting an existing heading also includes that section's Markdown.
 
-The surrounding instruction tells the agent what to do: read, summarize, or write. The extension does not interpret that instruction or write notes. The agent uses the Obsidian skill for reads and writes.
+The surrounding instruction tells the agent what to do: read, summarize, or write. The extension does not interpret that instruction or write notes. The agent uses the bundled Obsidian skill for reads and writes.
+
+## TODO
+
+- [ ] Maybe with skill or with other manner create a template for file writing
 
 ## Requirements
 
@@ -31,6 +35,10 @@ Run `/obsidian-setup`, choose a vault, and choose a keyword such as `obs`. The c
 ```
 
 Keywords may contain letters, numbers, `_`, and `-`. Multiple keywords can point to one vault; they share its index and watcher.
+
+## Skill
+
+The package also ships the `obsidian` skill (`skills/obsidian/SKILL.md`), declared under `pi.skills`, so installing the package makes the skill available to the agent. It teaches the agent to use the `obsidian` CLI for vault reads, writes, and handoff notes between sessions, and resolves the vault from the pi-obsidian config, the active vault, or an explicit request rather than a hardcoded path. Force it with `/skill:obsidian`.
 
 ### Excluded folders
 
