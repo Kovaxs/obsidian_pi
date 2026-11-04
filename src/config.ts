@@ -63,6 +63,12 @@ export function visibleFiles(files: VaultFile[], excludeFolders: string[] = []):
 	return files.filter((file) => !excludeFolders.some((folder) => file.path.startsWith(`${folder}/`)));
 }
 
+/** Removes excluded folders and their descendants from the folder inventory. */
+export function visibleFolders(folders: string[], excludeFolders: string[] = []): string[] {
+	if (excludeFolders.length === 0) return folders;
+	return folders.filter((path) => !excludeFolders.some((folder) => path === folder || path.startsWith(`${folder}/`)));
+}
+
 function parseVaultConfig(value: unknown, keyword: string): VaultConfig {
 	// Config JSON is user input, including when callers save a new mapping.
 	if (!isRecord(value) || typeof value.vault !== "string" || !value.vault) {

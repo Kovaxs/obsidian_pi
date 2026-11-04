@@ -6,7 +6,7 @@ export type Exec = (command: string, args: string[], options?: ExecOptions) => P
 const COMMAND_TIMEOUT_MS = 10_000;
 
 // Keep this script self-contained: Obsidian's eval context does not expose API helper globals.
-const INDEX_SCRIPT = `JSON.stringify(app.vault.getMarkdownFiles().map(f=>{const c=app.metadataCache.getFileCache(f);const inline=(c?.tags||[]).map(t=>t.tag);const raw=c?.frontmatter?.tags??[];const front=(Array.isArray(raw)?raw:[raw]).flatMap(v=>String(v).split(",")).map(v=>v.trim()).filter(Boolean).map(v=>v.startsWith("#")?v:"#"+v);return {path:f.path,mtime:f.stat.mtime,tags:[...new Set([...inline,...front])],headings:(c?.headings||[]).map(h=>[h.level,h.heading,h.position.start.line])}}))`;
+const INDEX_SCRIPT = `JSON.stringify({folders:app.vault.getAllFolders().map(f=>f.path).filter(p=>p!=="/"),files:app.vault.getMarkdownFiles().map(f=>{const c=app.metadataCache.getFileCache(f);const inline=(c?.tags||[]).map(t=>t.tag);const raw=c?.frontmatter?.tags??[];const front=(Array.isArray(raw)?raw:[raw]).flatMap(v=>String(v).split(",")).map(v=>v.trim()).filter(Boolean).map(v=>v.startsWith("#")?v:"#"+v);return {path:f.path,mtime:f.stat.mtime,tags:[...new Set([...inline,...front])],headings:(c?.headings||[]).map(h=>[h.level,h.heading,h.position.start.line])}})})`;
 
 export class ObsidianCli {
 	private readonly exec: Exec;
@@ -36,8 +36,8 @@ export class ObsidianCli {
 	async buildIndex(vault: string): Promise<VaultIndex> {
 		const vaultPath = await this.getVaultPath(vault);
 		const result = await this.runVault(vault, ["eval", `code=${INDEX_SCRIPT}`]);
-		const files = parseIndexOutput(result.stdout);
-		return { generatedAt: Date.now(), vault, vaultPath, files };
+		const { files, folders } = parseIndexOutput(result.stdout);
+		return { generatedAt: Date.now(), vault, vaultPath, files, folders };
 	}
 
 	async readNote(vault: string, path: string): Promise<string> {
@@ -68,7 +68,7 @@ export class ObsidianCli {
 	}
 }
 
-function parseIndexOutput(output: string): VaultFile[] {
+function parseIndexOutput(output: string): Pick<VaultIndex, "files" | "folders"> {
 	let text = output.trim();
 	if (text.startsWith("=>")) text = text.slice(2).trim();
 	let value: unknown;
@@ -77,8 +77,12 @@ function parseIndexOutput(output: string): VaultFile[] {
 	} catch {
 		throw new Error("Obsidian eval returned invalid JSON");
 	}
-	if (!Array.isArray(value)) throw new Error("Obsidian eval did not return a file list");
-	return value.map(parseVaultFile);
+	// Obsidian eval is an external process; validate both inventories before caching them.
+	if (!isRecord(value) || !Array.isArray(value.files)) throw new Error("Obsidian eval did not return a file list");
+	if (!Array.isArray(value.folders) || !value.folders.every((folder) => typeof folder === "string")) {
+		throw new Error("Obsidian eval did not return a folder list");
+	}
+	return { files: value.files.map(parseVaultFile), folders: value.folders };
 }
 
 function parseVaultFile(value: unknown): VaultFile {

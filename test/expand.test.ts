@@ -26,7 +26,13 @@ const contents = new Map([
 	["other note.md", "other text\n"],
 ]);
 
-async function fixture(t: TestContext, indexFiles = files, excludeFolders: string[] = [], noteContents = contents) {
+async function fixture(
+	t: TestContext,
+	indexFiles = files,
+	excludeFolders: string[] = [],
+	noteContents = contents,
+	folders: string[] = [],
+) {
 	const directory = await mkdtemp(join(tmpdir(), "pi-obsidian-expand-"));
 	const reads: string[] = [];
 	const cli = new ObsidianCli(async (_command, args) => {
@@ -38,7 +44,7 @@ async function fixture(t: TestContext, indexFiles = files, excludeFolders: strin
 			return execResult(noteContents.get(path)!);
 		}
 		assert.equal(args[1], "eval", "The extension must not write to the vault");
-		return execResult(`=> ${JSON.stringify(indexFiles)}\n`);
+		return execResult(`=> ${JSON.stringify({ files: indexFiles, folders })}\n`);
 	});
 	const store = new VaultIndexStore(cli, "vault", { cacheDir: directory });
 	t.after(async () => {
@@ -68,6 +74,82 @@ test("resolves a file to vault and path metadata without reading its content", a
 	assert.match(result.text, /Content: not included/);
 	assert.match(result.text, /please$/);
 	assert.doesNotMatch(result.text, /setup text|install text|usage text/);
+	assert.deepEqual(reads, []);
+});
+
+test("resolves existing folders without adding .md or reading their notes", async (t) => {
+	const folders = ["Projects", "Projects/Folder name", "Empty folder", "Attachments"];
+	const { cli, vaults, reads } = await fixture(t, files, [], contents, folders);
+	for (const path of folders) {
+		for (const name of [path, `${path}/`, `./${path}`]) {
+			const result = await expandPrompt(`Use @@obs@${JSON.stringify(name)} here`, vaults, cli);
+			assert.deepEqual(result.errors, []);
+			assert.match(result.text, /^Use \[Obsidian folder\]/);
+			assert.ok(result.text.includes(`Path: ${path}\nAbsolute path: /vault/${path}\n`));
+			assert.match(result.text, /Folder: found in index\nContent: not included/);
+			assert.match(result.text, /\[End Obsidian folder\] here$/);
+			assert.equal(result.changes[0]?.blocks, 1);
+			assert.doesNotMatch(result.text, /\.md|Obsidian note/);
+		}
+	}
+	assert.deepEqual(reads, []);
+});
+
+test("a trailing slash distinguishes a folder from a same-named note", async (t) => {
+	const { cli, vaults, reads } = await fixture(t, files, [], contents, ["other note"]);
+	const note = await expandPrompt('@@obs@"other note"', vaults, cli);
+	assert.deepEqual(note.errors, []);
+	assert.match(note.text, /Path: other note.md\n/);
+	const folder = await expandPrompt('@@obs@"other note/"', vaults, cli);
+	assert.deepEqual(folder.errors, []);
+	assert.match(folder.text, /Path: other note\n/);
+	assert.match(folder.text, /\[Obsidian folder\]/);
+	const mixed = await expandPrompt('@@obs@"other note/","other note","other note/"', vaults, cli);
+	assert.deepEqual(mixed.errors, []);
+	assert.equal(mixed.changes[0]?.blocks, 2);
+	assert.deepEqual(reads, []);
+});
+
+test("an exact folder path takes precedence over a note basename elsewhere", async (t) => {
+	const nested: VaultFile = { ...files[1]!, path: "Archive/Projects.md" };
+	const { cli, vaults, reads } = await fixture(t, [nested], [], contents, ["Projects"]);
+	const folder = await expandPrompt("@@obs@Projects", vaults, cli);
+	assert.deepEqual(folder.errors, []);
+	assert.match(folder.text, /\[Obsidian folder\]/);
+	assert.match(folder.text, /Path: Projects\n/);
+	const note = await expandPrompt("@@obs@Projects.md", vaults, cli);
+	assert.deepEqual(note.errors, []);
+	assert.match(note.text, /Path: Archive\/Projects.md\n/);
+	assert.deepEqual(reads, []);
+});
+
+test("folder references honor exclusions without hiding similarly named folders", async (t) => {
+	const folders = ["Private", "Private/Deep", "Private Archive", "Projects/Private"];
+	const { cli, vaults } = await fixture(t, files, ["Private"], contents, folders);
+	for (const path of ["Private", "Private/Deep"]) {
+		for (const name of [path, `${path}/`]) {
+			const chain = `@@obs@${JSON.stringify(name)}`;
+			const result = await expandPrompt(chain, vaults, cli);
+			assert.equal(result.text, chain);
+			assert.match(result.errors[0] ?? "", /excluded/);
+		}
+		const unrestricted = await expandPrompt(`@@all@${JSON.stringify(path)}`, vaults, cli);
+		assert.deepEqual(unrestricted.errors, []);
+	}
+	for (const path of ["Private Archive", "Projects/Private"]) {
+		const result = await expandPrompt(`@@obs@${JSON.stringify(path)}`, vaults, cli);
+		assert.deepEqual(result.errors, []);
+		assert.ok(result.text.includes(`Path: ${path}\n`));
+	}
+});
+
+test("folders cannot silently become note destinations when tags or headings are selected", async (t) => {
+	const { cli, vaults, reads } = await fixture(t, files, [], contents, ["Projects"]);
+	for (const chain of ['@@obs+python@Projects', '@@obs@Projects#Setup', '@@obs@"Projects/"#Setup']) {
+		const result = await expandPrompt(chain, vaults, cli);
+		assert.equal(result.text, chain);
+		assert.match(result.errors[0] ?? "", /folder references cannot select tags or headings/);
+	}
 	assert.deepEqual(reads, []);
 });
 

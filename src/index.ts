@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI): void {
 			for (const error of result.errors) ctx.ui.notify(`Obsidian: ${error}`, "error");
 			for (const change of result.changes) {
 				const suffix = change.truncated ? " (truncated)" : "";
-				ctx.ui.notify(`Obsidian: resolved ${change.files} note reference(s) into ${change.blocks} block(s)${suffix}`, "info");
+				ctx.ui.notify(`Obsidian: resolved ${change.files} path reference(s) into ${change.blocks} block(s)${suffix}`, "info");
 			}
 		}
 		if (result.changes.length === 0) return { action: "continue" };

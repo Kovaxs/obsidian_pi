@@ -111,8 +111,9 @@ export class VaultIndexStore {
 	private startWatcher(): void {
 		if (this.watcher || this.stopped || !this.current?.vaultPath) return;
 		try {
-			this.watcher = watch(this.current.vaultPath, { recursive: true }, (_event, filename) => {
-				if (filename && !filename.toString().endsWith(".md")) return;
+			this.watcher = watch(this.current.vaultPath, { recursive: true }, (event, filename) => {
+				// Folder creation, rename, and removal also change the indexed paths.
+				if (event === "change" && filename && !filename.toString().endsWith(".md")) return;
 				this.scheduleRefresh();
 			});
 			this.watcher.on("error", (error) => {
@@ -159,7 +160,9 @@ function parseCachedIndex(text: string, vault: string): VaultIndex {
 		value.vault !== vault ||
 		typeof value.vaultPath !== "string" ||
 		typeof value.generatedAt !== "number" ||
-		!Array.isArray(value.files)
+		!Array.isArray(value.files) ||
+		!Array.isArray(value.folders) ||
+		!value.folders.every((folder) => typeof folder === "string")
 	) {
 		throw new Error("invalid cache shape");
 	}

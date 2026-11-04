@@ -1,6 +1,11 @@
-import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
+import {
+	fuzzyFilter,
+	type AutocompleteItem,
+	type AutocompleteProvider,
+	type AutocompleteSuggestions,
+} from "@earendil-works/pi-tui";
 import { findChainSpans, formatName, parsePartialChain, type Chain, type Segment } from "./chain.ts";
-import { visibleFiles } from "./config.ts";
+import { visibleFiles, visibleFolders } from "./config.ts";
 import {
 	findHeadingNodes,
 	flattenHeadingTree,
@@ -39,8 +44,10 @@ export function createObsidianAutocomplete(
 			if (!store) return current.getSuggestions(lines, cursorLine, cursorCol, options);
 			const index = store.index;
 			if (!index) return current.getSuggestions(lines, cursorLine, cursorCol, options);
-			const files = visibleFiles(index.files, vaults.getExcludedFolders(chain.keyword));
-			const items = getItems(chain, files, options.force === true).slice(0, MAX_SUGGESTIONS);
+			const exclusions = vaults.getExcludedFolders(chain.keyword);
+			const files = visibleFiles(index.files, exclusions);
+			const folders = visibleFolders(index.folders, exclusions);
+			const items = getItems(chain, files, folders, options.force === true).slice(0, MAX_SUGGESTIONS);
 			if (items.length === 0) return current.getSuggestions(lines, cursorLine, cursorCol, options);
 			return { prefix: span.raw, items };
 		},
@@ -64,9 +71,9 @@ export function createObsidianAutocomplete(
 	};
 }
 
-function getItems(chain: Chain, files: VaultFile[], force: boolean): AutocompleteItem[] {
+function getItems(chain: Chain, files: VaultFile[], folders: string[], force: boolean): AutocompleteItem[] {
 	const active = chain.segments.at(-1);
-	if (!active) return fileItems({ files, sectionPath: [] }, "", chain);
+	if (!active) return fileItems({ files, sectionPath: [] }, folders, "", chain);
 	const completed = chain.segments.slice(0, -1);
 	const previous = runStages(files, completed);
 
@@ -87,7 +94,8 @@ function getItems(chain: Chain, files: VaultFile[], force: boolean): Autocomplet
 	if (active.kind === "files") {
 		const query = active.files.at(-1) ?? "";
 		const completedFiles = active.files.slice(0, -1);
-		return fileItems(previous, query, chain, completed, completedFiles);
+		const candidates = completed.some((segment) => segment.kind === "tags") ? [] : folders;
+		return fileItems(previous, candidates, query, chain, completed, completedFiles);
 	}
 
 	const selection = runStages(previous.files, completed);
@@ -109,12 +117,13 @@ function getItems(chain: Chain, files: VaultFile[], force: boolean): Autocomplet
 
 function fileItems(
 	selection: Selection,
+	folders: string[],
 	query: string,
 	chain: Chain,
 	completedSegments: Segment[] = chain.segments,
 	completedFiles: string[] = [],
 ): AutocompleteItem[] {
-	return suggestFiles(selection, query).map((file) => {
+	const items = suggestFiles(selection, "").map((file) => {
 		const files = [...completedFiles.map(formatName), formatName(file.path.replace(/\.md$/, ""))].join(",");
 		return {
 			value: `${renderChain(chain.keyword, completedSegments)}@${files}`,
@@ -122,6 +131,18 @@ function fileItems(
 			description: `${file.tags.join(" ")}${file.headings.length > 0 ? ` · ${file.headings.length} headings` : ""}`,
 		};
 	});
+	for (const folder of folders) {
+		const paths = [...completedFiles, `${folder}/`].map(formatName).join(",");
+		items.push({
+			value: `${renderChain(chain.keyword, completedSegments)}@${paths}`,
+			label: `${folder}/`,
+			description: "Folder",
+		});
+	}
+	if (!query) return items.sort((a, b) => a.label.localeCompare(b.label));
+	return fuzzyFilter(items, query, (item) =>
+		item.label.endsWith("/") ? item.label : `${item.label.split("/").at(-1)} ${item.label}.md`,
+	);
 }
 
 function headingTreeItems(chain: Chain, completed: Segment[], selection: Selection): AutocompleteItem[] {

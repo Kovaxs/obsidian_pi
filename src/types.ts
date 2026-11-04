@@ -12,6 +12,7 @@ export interface VaultIndex {
 	vault: string;
 	vaultPath: string;
 	files: VaultFile[];
+	folders: string[];
 }
 
 export interface VaultLocation {

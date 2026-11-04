@@ -20,9 +20,9 @@ const files: VaultFile[] = [
 	{ path: "networking.md", mtime: 2, tags: ["#networking/dns", "#networking/reverse-proxy"], headings: [] },
 ];
 
-async function fixture(excludeFolders: string[] = [], indexFiles = files) {
+async function fixture(excludeFolders: string[] = [], indexFiles = files, folders: string[] = []) {
 	const cli = new ObsidianCli(async (_command, args) => {
-		const stdout = args[0] === "vaults" ? "vault\t/vault\n" : `=> ${JSON.stringify(indexFiles)}\n`;
+		const stdout = args[0] === "vaults" ? "vault\t/vault\n" : `=> ${JSON.stringify({ files: indexFiles, folders })}\n`;
 		return {
 			stdout,
 			stderr: "",
@@ -47,6 +47,47 @@ test("suggests files with fuzzy matching and quoted insertion", async () => {
 	assert.equal(suggestions?.items[0]?.value, '@@obs@"uv dockerfile"');
 	const applied = provider.applyCompletion([line], 0, line.length, suggestions!.items[0]!, suggestions!.prefix);
 	assert.deepEqual(applied, { lines: ['@@obs@"uv dockerfile"'], cursorLine: 0, cursorCol: 21 });
+});
+
+test("keeps matching note paths that include the Markdown extension", async () => {
+	const provider = await fixture();
+	const line = "@@obs@networking.md";
+	const suggestions = await provider.getSuggestions([line], 0, line.length, { signal: new AbortController().signal });
+	assert.equal(suggestions?.items[0]?.value, "@@obs@networking");
+});
+
+test("suggests folders with full paths and a trailing slash, including empty folders", async () => {
+	const provider = await fixture([], files, ["Projects", "Projects/Folder name", "Empty folder"]);
+	const options = { signal: new AbortController().signal };
+	for (const line of ["@@obs", "@@obs@", '@@obs@"fold']) {
+		const suggestions = await provider.getSuggestions([line], 0, line.length, options);
+		const item = suggestions?.items.find((item) => item.label === "Projects/Folder name/");
+		assert.ok(item);
+		assert.equal(item.value, '@@obs@"Projects/Folder name/"');
+		assert.equal(item.description, "Folder");
+		const applied = provider.applyCompletion([line], 0, line.length, item, suggestions!.prefix);
+		assert.equal(applied.lines[0], item.value);
+	}
+	const emptyLine = "@@obs@Empty";
+	const empty = await provider.getSuggestions([emptyLine], 0, emptyLine.length, options);
+	assert.equal(empty?.items[0]?.value, '@@obs@"Empty folder/"');
+	const multiple = '@@obs@"uv dockerfile",fold';
+	const suggestions = await provider.getSuggestions([multiple], 0, multiple.length, options);
+	assert.ok(suggestions?.items.some((item) => item.value === '@@obs@"uv dockerfile","Projects/Folder name/"'));
+});
+
+test("folder suggestions honor keyword exclusions and do not appear under tag filters", async () => {
+	const provider = await fixture(["Private"], files, ["Private", "Private/Deep", "Private Archive"]);
+	const options = { signal: new AbortController().signal };
+	const line = "@@obs@";
+	const suggestions = await provider.getSuggestions([line], 0, line.length, options);
+	assert.deepEqual(suggestions?.items.filter((item) => item.description === "Folder").map((item) => item.label), ["Private Archive/"]);
+	const all = "@@all@";
+	const unrestricted = await provider.getSuggestions([all], 0, all.length, options);
+	assert.equal(unrestricted?.items.filter((item) => item.description === "Folder").length, 3);
+	const tagged = "@@obs+python@";
+	const filtered = await provider.getSuggestions([tagged], 0, tagged.length, options);
+	assert.ok(filtered?.items.every((item) => item.description !== "Folder"));
 });
 
 test("suggests root tags with child markers and counts", async () => {

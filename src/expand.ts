@@ -1,6 +1,6 @@
 import { join, posix } from "node:path";
 import { findChainSpans, parseChain, type Chain } from "./chain.ts";
-import { visibleFiles } from "./config.ts";
+import { visibleFiles, visibleFolders } from "./config.ts";
 import type { ObsidianCli } from "./obsidian-cli.ts";
 import { findHeadingNodes, runStages } from "./stages.ts";
 import type { VaultIndexStore } from "./vault-index.ts";
@@ -32,16 +32,19 @@ export interface ExpansionOptions {
 	maxChainBytes?: number;
 }
 
-type NoteReference = { kind: "existing"; file: VaultFile; path: string } | { kind: "new"; path: string };
+type PathReference =
+	| { kind: "existing"; file: VaultFile; path: string }
+	| { kind: "new"; path: string }
+	| { kind: "folder"; path: string };
 
 interface ExpansionBlock {
-	reference: NoteReference;
+	reference: PathReference;
 	sectionPath: string[];
 	heading?: Heading;
 	text?: string;
 }
 
-/** Resolves chains to note paths, including content only for existing selected sections. */
+/** Resolves chains to note or folder paths, including content only for existing selected sections. */
 export async function expandPrompt(
 	input: string,
 	vaults: VaultProvider,
@@ -98,7 +101,7 @@ async function expandChain(
 		let noteBytes = 0;
 		for (const block of blocks) {
 			const header = renderHeader(raw, index, block);
-			const endMarker = "\n[End Obsidian note]";
+			const endMarker = `\n[End Obsidian ${reference.kind === "folder" ? "folder" : "note"}]`;
 			const separator = rendered.length > 0 ? "\n\n" : "";
 			const available = maxChainBytes - chainBytes - byteLength(separator + header + endMarker);
 			if (available < 0 || (block.text !== undefined && noteBytes >= maxNoteBytes)) {
@@ -121,7 +124,7 @@ async function expandChain(
 	return { text, files: references.length, blocks: rendered.length, truncated };
 }
 
-function resolveReferences(index: VaultIndex, chain: Chain, excludeFolders: string[] = []): NoteReference[] {
+function resolveReferences(index: VaultIndex, chain: Chain, excludeFolders: string[] = []): PathReference[] {
 	const fileStage = chain.segments.find((segment) => segment.kind === "files");
 	if (!fileStage) {
 		const selection = runStages(visibleFiles(index.files, excludeFolders), chain.segments);
@@ -129,12 +132,26 @@ function resolveReferences(index: VaultIndex, chain: Chain, excludeFolders: stri
 		return selection.files.map((file) => ({ kind: "existing", file, path: file.path }));
 	}
 
-	const references = new Map<string, NoteReference>();
+	const references = new Map<string, PathReference>();
 	const tags = chain.segments.filter((segment) => segment.kind === "tags");
+	const folders = visibleFolders(index.folders, excludeFolders);
 	for (const name of fileStage.files) {
-		const path = normalizeReferencePath(name);
-		const matches = runStages(index.files, [{ kind: "files", files: [path] }]).files;
-		if (matches.length > 0) {
+		const normalized = normalizeReferencePath(name);
+		const folderPath = normalized.replace(/\/$/, "");
+		const folder = index.folders.find((path) => path.toLocaleLowerCase() === folderPath.toLocaleLowerCase());
+		const path = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+		const matches = normalized.endsWith("/") ? [] : runStages(index.files, [{ kind: "files", files: [path] }]).files;
+		const exactNote = matches.some((file) => file.path.toLocaleLowerCase() === path.toLocaleLowerCase());
+		// Exact note paths win collisions, but basename matches must not hide a folder's full path.
+		if (folder && !exactNote) {
+			if (!folders.includes(folder)) throw new Error(`no notes match "${name}": folder is excluded`);
+			if (tags.length > 0 || chain.segments.some((segment) => segment.kind === "section")) {
+				throw new Error("folder references cannot select tags or headings; select a note instead");
+			}
+			references.set(`${folder}/`, { kind: "folder", path: folder });
+		} else if (normalized.endsWith("/")) {
+			throw new Error("folder paths must name an existing folder relative to the vault");
+		} else if (matches.length > 0) {
 			const selected = runStages(visibleFiles(matches, excludeFolders), tags).files;
 			if (selected.length === 0) throw new Error(`no notes match "${name}" with these tags and folder exclusions`);
 			for (const file of selected) references.set(file.path, { kind: "existing", file, path: file.path });
@@ -156,20 +173,20 @@ function normalizeReferencePath(name: string): string {
 	// Unlike indexed paths, typed destinations have not passed through Obsidian's vault API.
 	if (
 		path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.split("/").includes("..") ||
-		normalized === "." || normalized.endsWith("/") || posix.basename(normalized) === ".md"
+		normalized === "." || posix.basename(normalized) === ".md"
 	) {
-		throw new Error("note paths must name a file relative to the vault and cannot contain ..");
+		throw new Error("paths must name a note or folder relative to the vault and cannot contain ..");
 	}
-	return normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+	return normalized;
 }
 
 async function selectFileBlocks(
-	reference: NoteReference,
+	reference: PathReference,
 	sectionPath: string[],
 	vault: string,
 	cli: ObsidianCli,
 ): Promise<ExpansionBlock[]> {
-	if (reference.kind === "new" || sectionPath.length === 0) return [{ reference, sectionPath }];
+	if (reference.kind !== "existing" || sectionPath.length === 0) return [{ reference, sectionPath }];
 	const file = reference.file;
 	const matches = findHeadingNodes(file, sectionPath);
 	if (matches.length === 0) return [{ reference, sectionPath }];
@@ -193,13 +210,15 @@ function findSectionEnd(headings: Heading[], selected: Heading, lineCount: numbe
 
 function renderHeader(raw: string, index: VaultIndex, block: ExpansionBlock): string {
 	const lines = [
-		"[Obsidian note]",
+		`[Obsidian ${block.reference.kind === "folder" ? "folder" : "note"}]`,
 		`Reference: ${raw}`,
 		`Vault: ${index.vault}`,
 		`Vault path: ${index.vaultPath}`,
 		`Path: ${block.reference.path}`,
 		`Absolute path: ${join(index.vaultPath, block.reference.path)}`,
-		`Note: ${block.reference.kind === "existing" ? "found in index" : "not found in index (new destination)"}`,
+		block.reference.kind === "folder"
+			? "Folder: found in index"
+			: `Note: ${block.reference.kind === "existing" ? "found in index" : "not found in index (new destination)"}`,
 	];
 	if (block.sectionPath.length > 0) {
 		lines.push(`Section: ${block.sectionPath.join(" > ")}`);

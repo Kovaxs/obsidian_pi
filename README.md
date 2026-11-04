@@ -1,6 +1,6 @@
 # pi-obsidian
 
-A pi extension for human-assisted Obsidian references. Type a vault chain in the prompt and navigate files, tags, and headings with autocomplete. On submit, pi gives the agent the resolved vault and file paths. Selecting an existing heading also includes that section's Markdown.
+A pi extension for human-assisted Obsidian references. Type a vault chain in the prompt and navigate files, folders, tags, and headings with autocomplete. On submit, pi gives the agent the resolved vault and file paths. Selecting an existing heading also includes that section's Markdown.
 
 The surrounding instruction tells the agent what to do: read, summarize, or write. The extension does not interpret that instruction or write notes. The agent uses the bundled Obsidian skill for reads and writes.
 
@@ -58,6 +58,7 @@ Every stage is optional:
 
 - `+python,docker` requires both tags. `+python` also matches `python/uv`. After a parent tag, type `/` for its direct children. `▸` marks tags with children.
 - `@"docker/uv dockerfile"` selects a note by vault-relative path. While typing, names and paths are fuzzy-matched; completion inserts the full path without `.md` to distinguish duplicate note names. Manually typed names are also accepted; an exact vault-relative path takes precedence over basename matches. Separate several names with commas.
+- `@"Projects/Folder name"` references an existing folder by vault-relative path, including empty folders. Completion inserts a trailing `/` to identify it as a folder. An exact note path takes precedence over a same-named folder unless the reference ends with `/`.
 - `#Setup##Install` selects a heading path. Hash count is tree depth, not the Markdown H1/H2 level, so skipped heading levels work.
 
 A space outside double quotes ends a chain. Completion quotes names containing spaces or grammar characters. Tab reopens completion after a quoted name. Immediately after `#`, Tab shows the whole heading tree with indentation and inserts the full path to the selected heading.
@@ -66,6 +67,7 @@ Examples:
 
 ```text
 Summarize @@obs@"project plan"
+Create a note inside @@obs@"Projects/Folder name/"
 Compare @@obs+python,docker
 Use the install steps in @@obs@"uv dockerfile"#Setup##Install
 ```
@@ -74,21 +76,22 @@ A chain with no file stage can select many notes. A bare `@@obs` returns paths f
 
 ## Resolved references and section context
 
-Each block includes the original chain, configured vault name, vault root, vault-relative note path (including `.md`), absolute file path, and whether the note was found in the index.
+Each block includes the original chain, configured vault name, vault root, vault-relative path, absolute path, and whether the note or folder was found in the index. Note paths include `.md`; folder paths do not gain an extension.
 
+- **Folder:** includes only the folder's path metadata, without listing or reading its notes. Tag and heading stages cannot select folders. Folder references can be combined with note references using commas.
 - **File only:** includes path metadata, without reading or inserting the note's content. The agent can read it through the Obsidian skill.
 - **Existing heading:** also includes its 1-based line number, Markdown heading level, and section content. The content includes the selected heading and stops before the next heading of the same or higher Markdown level.
 - **New note or missing heading:** preserves the explicit destination and marks it as not found in the index. It does not read unrelated content, create anything, or treat the reference as permission to write.
 
-For a new destination, type its vault-relative path; `.md` is added if omitted. Absolute paths, `..`, folder-only targets, and destinations in excluded folders are rejected. Tags only filter existing notes; a missing note cannot satisfy a tag filter. Unknown vault keywords, malformed chains, and failed searches remain unchanged and produce an error notice.
+For a new destination, type its vault-relative path; `.md` is added if omitted. Absolute paths, `..`, unknown folder paths ending with `/`, and destinations in excluded folders are rejected. Existing folders resolve as folders; unknown names without a trailing `/` still resolve as new note destinations. Tags only filter existing notes; a missing note cannot satisfy a tag filter. Unknown vault keywords, malformed chains, and failed searches remain unchanged and produce an error notice.
 
 Selected section content is capped at **50,000 UTF-8 bytes per note**. The complete reference blocks, including metadata, are capped at **100,000 bytes per chain**. Truncation adds an explicit marker. Index status and heading locations describe the cached index; the skill should check the current note before writing.
 
 ## Cache and refresh
 
-Indexes contain note paths, modification times, inline and frontmatter tags, and heading positions. They are stored at `~/.cache/pi-obsidian/<vault>.json` (respecting `XDG_CACHE_HOME`) and written atomically.
+Indexes contain folder paths (including empty folders), note paths, modification times, inline and frontmatter tags, and heading positions. They are stored at `~/.cache/pi-obsidian/<vault>.json` (respecting `XDG_CACHE_HOME`) and written atomically.
 
-Cached data is available immediately. Startup refreshes it in the background, and a recursive vault watcher batches changes for 250 ms before rebuilding through `obsidian eval`. If Obsidian is unavailable, the last cache remains usable and pi shows a warning. If metadata predates a file modification, the extension retries once.
+Cached data is available immediately. Startup refreshes it in the background, and a recursive vault watcher batches changes for 250 ms before rebuilding through `obsidian eval`. If Obsidian is unavailable, the last cache remains usable and pi shows a warning. Older caches without folder metadata are rebuilt on the next successful refresh. If metadata predates a file modification, the extension retries once.
 
 ## Read and write instructions
 
