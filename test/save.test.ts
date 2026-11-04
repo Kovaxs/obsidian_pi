@@ -38,6 +38,18 @@ test("rejects vault-wide, tag-only, multiple-file, and ambiguous targets", () =>
 	assert.throws(() => resolveSaveTarget(index, "@@obs@note,other"), /exactly one file/);
 });
 
+test("excluded folders cannot be targeted by name or full path", () => {
+	const hiddenIndex: VaultIndex = {
+		...index,
+		files: [...index.files, { path: "Fleeting Notes/deep/secret.md", mtime: 1, tags: [], headings: [] }],
+	};
+	for (const chain of ["@@obs@secret", '@@obs@"Fleeting Notes/deep/secret"']) {
+		assert.throws(() => resolveSaveTarget(hiddenIndex, chain, ["Fleeting Notes"]), /found 0/);
+	}
+	assert.equal(resolveSaveTarget(hiddenIndex, "@@obs@note", ["Fleeting Notes"]).file.path, "note.md");
+	assert.equal(resolveSaveTarget(hiddenIndex, "@@all@secret").file.path, "Fleeting Notes/deep/secret.md");
+});
+
 test("appendNote passes the exact vault, path, content, and heading without a shell", async () => {
 	let captured: string[] = [];
 	const cli = new ObsidianCli(async (_command, args) => {

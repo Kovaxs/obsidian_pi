@@ -1,4 +1,5 @@
 import { findChainSpans, parseChain } from "./chain.ts";
+import { visibleFiles } from "./config.ts";
 import type { ObsidianCli } from "./obsidian-cli.ts";
 import { findHeadingNodes, runStages } from "./stages.ts";
 import type { VaultIndexStore } from "./vault-index.ts";
@@ -9,6 +10,7 @@ export const DEFAULT_MAX_CHAIN_BYTES = 100_000;
 
 export interface VaultProvider {
 	getStore(keyword: string): VaultIndexStore | undefined;
+	getExcludedFolders(keyword: string): string[] | undefined;
 }
 
 export interface ExpansionChange {
@@ -75,7 +77,7 @@ async function expandChain(
 	const store = vaults.getStore(chain.keyword);
 	if (!store) throw new Error(`unknown vault keyword "${chain.keyword}"; run /obsidian-setup`);
 	const index = await store.ensureIndex();
-	const selection = runStages(index.files, chain.segments);
+	const selection = runStages(visibleFiles(index.files, vaults.getExcludedFolders(chain.keyword)), chain.segments);
 	if (selection.files.length === 0) throw new Error("no notes match this chain");
 
 	const maxNoteBytes = options.maxNoteBytes ?? DEFAULT_MAX_NOTE_BYTES;

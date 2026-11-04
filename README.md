@@ -27,13 +27,24 @@ Run `/obsidian-setup`, choose a vault, and choose a keyword such as `obs`. The c
 ```json
 {
   "vaults": {
-    "obs": { "vault": "external_brain" },
+    "obs": {
+      "vault": "external_brain",
+      "excludeFolders": ["Fleeting Notes", "Archive/Private"]
+    },
     "work": { "vault": "work_vault" }
   }
 }
 ```
 
 Keywords may contain letters, numbers, `_`, and `-`. Multiple keywords can point to one vault; they share its index and watcher.
+
+### Excluded folders
+
+The optional `excludeFolders` list hides a folder and all its descendants from file, tag, and heading suggestions, prompt expansion (including explicitly typed references), and `/obs-save`. Omit it or use `[]` to include every folder.
+
+Paths are relative to the vault root and case-sensitive. Use `Fleeting Notes` for the root folder or `Projects/Fleeting Notes` for a nested folder. `Fleeting Notes` does not hide `Fleeting Notes Archive` or a note named `Fleeting Notes.md`. These are literal folder paths, not glob patterns. Absolute paths and `..` are rejected; trailing slashes and a leading `./` are accepted.
+
+Exclusions apply per keyword, so another keyword for the same vault can use a different list. The shared disk cache still contains metadata for the entire vault; this is a navigation filter, not a filesystem security boundary. `/obsidian-setup` preserves an existing keyword's exclusions. After editing the config, run `/reload` or restart pi.
 
 ## Reference syntax
 

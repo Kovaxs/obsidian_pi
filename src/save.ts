@@ -1,4 +1,5 @@
 import { findChainSpans, parseChain } from "./chain.ts";
+import { visibleFiles } from "./config.ts";
 import { findHeadingNodes, runStages } from "./stages.ts";
 import type { VaultFile, VaultIndex } from "./types.ts";
 
@@ -23,13 +24,13 @@ export function parseSaveArguments(args: string): SaveRequest {
 }
 
 /** Resolves a save chain, requiring exactly one explicitly named target note. */
-export function resolveSaveTarget(index: VaultIndex, raw: string): SaveTarget {
+export function resolveSaveTarget(index: VaultIndex, raw: string, excludeFolders?: string[]): SaveTarget {
 	const chain = parseChain(raw);
 	const fileStage = chain.segments.find((segment) => segment.kind === "files");
 	if (!fileStage || fileStage.files.length !== 1 || !fileStage.files[0]) {
 		throw new Error("The save target must name exactly one file with @");
 	}
-	const selection = runStages(index.files, chain.segments);
+	const selection = runStages(visibleFiles(index.files, excludeFolders), chain.segments);
 	if (selection.files.length !== 1 || !selection.files[0]) {
 		throw new Error(`Expected one target note, found ${selection.files.length}`);
 	}

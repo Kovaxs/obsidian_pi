@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createObsidianAutocomplete } from "./autocomplete.ts";
-import { loadConfig, saveConfig, validateKeyword } from "./config.ts";
+import { loadConfig, saveConfig, validateKeyword, type VaultConfig } from "./config.ts";
 import { expandPrompt } from "./expand.ts";
 import { ObsidianCli } from "./obsidian-cli.ts";
 import { parseSaveArguments, resolveSaveTarget } from "./save.ts";
@@ -10,8 +10,14 @@ export default function (pi: ExtensionAPI): void {
 	const cli = new ObsidianCli((command, args, options) => pi.exec(command, args, options));
 	const stores = new Map<string, VaultIndexStore>();
 	const storesByVault = new Map<string, VaultIndexStore>();
+	const vaultConfigs = new Map<string, VaultConfig>();
+	const vaults = {
+		getStore: (keyword: string) => stores.get(keyword),
+		getExcludedFolders: (keyword: string) => vaultConfigs.get(keyword)?.excludeFolders,
+	};
 
-	async function registerVault(keyword: string, vault: string, ctx: ExtensionContext): Promise<void> {
+	async function registerVault(keyword: string, config: VaultConfig, ctx: ExtensionContext): Promise<void> {
+		const vault = config.vault;
 		let store = storesByVault.get(vault);
 		if (!store) {
 			store = new VaultIndexStore(cli, vault, {
@@ -24,6 +30,7 @@ export default function (pi: ExtensionAPI): void {
 			store.start();
 		}
 		stores.set(keyword, store);
+		vaultConfigs.set(keyword, config);
 	}
 
 	pi.registerCommand("obs-save", {
@@ -38,7 +45,7 @@ export default function (pi: ExtensionAPI): void {
 				const keyword = request.chain.slice(2).split(/[+@#]/, 1)[0] ?? "";
 				const store = stores.get(keyword);
 				if (!store) throw new Error(`Unknown vault keyword "${keyword}"; run /obsidian-setup`);
-				const target = resolveSaveTarget(await store.ensureIndex(), request.chain);
+				const target = resolveSaveTarget(await store.ensureIndex(), request.chain, vaults.getExcludedFolders(keyword));
 				const draft = request.draft ?? latestAssistantText(ctx);
 				const location = `${target.vault}/${target.file.path}${target.sectionPath.length > 0 ? ` — ${target.sectionPath.join(" > ")}` : ""}`;
 				const content = await ctx.ui.editor(`Review text to append to ${location}`, draft);
@@ -79,9 +86,10 @@ export default function (pi: ExtensionAPI): void {
 				if (!keyword) return;
 				validateKeyword(keyword);
 				const config = await loadConfig();
-				config.vaults[keyword] = { vault: vault.name };
+				const entry = { ...config.vaults[keyword], vault: vault.name };
+				config.vaults[keyword] = entry;
 				await saveConfig(config);
-				await registerVault(keyword, vault.name, ctx);
+				await registerVault(keyword, entry, ctx);
 				ctx.ui.notify(`Mapped @@${keyword} to ${vault.name}`, "info");
 			} catch (error) {
 				ctx.ui.notify(`Obsidian setup failed: ${errorMessage(error)}`, "error");
@@ -90,13 +98,11 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		ctx.ui.addAutocompleteProvider((current) =>
-			createObsidianAutocomplete(current, { getStore: (keyword) => stores.get(keyword) }),
-		);
+		ctx.ui.addAutocompleteProvider((current) => createObsidianAutocomplete(current, vaults));
 		try {
 			const config = await loadConfig();
 			await Promise.all(
-				Object.entries(config.vaults).map(([keyword, entry]) => registerVault(keyword, entry.vault, ctx)),
+				Object.entries(config.vaults).map(([keyword, entry]) => registerVault(keyword, entry, ctx)),
 			);
 		} catch (error) {
 			if (ctx.hasUI) ctx.ui.notify(`Could not load pi-obsidian config: ${errorMessage(error)}`, "error");
@@ -107,14 +113,11 @@ export default function (pi: ExtensionAPI): void {
 		for (const store of stores.values()) store.stop();
 		stores.clear();
 		storesByVault.clear();
+		vaultConfigs.clear();
 	});
 
 	pi.on("input", async (event, ctx) => {
-		const result = await expandPrompt(
-			event.text,
-			{ getStore: (keyword) => stores.get(keyword) },
-			cli,
-		);
+		const result = await expandPrompt(event.text, vaults, cli);
 		if (ctx.hasUI) {
 			for (const error of result.errors) ctx.ui.notify(`Obsidian: ${error}`, "error");
 			for (const change of result.changes) {

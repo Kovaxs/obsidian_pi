@@ -1,5 +1,6 @@
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 import { findChainSpans, formatName, parsePartialChain, type Chain, type Segment } from "./chain.ts";
+import { visibleFiles } from "./config.ts";
 import {
 	findHeadingNodes,
 	flattenHeadingTree,
@@ -16,6 +17,7 @@ const MAX_SUGGESTIONS = 30;
 
 export interface AutocompleteVaults {
 	getStore(keyword: string): VaultIndexStore | undefined;
+	getExcludedFolders(keyword: string): string[] | undefined;
 }
 
 /** Creates the stacked autocomplete provider for @@ vault chains. */
@@ -38,7 +40,8 @@ export function createObsidianAutocomplete(
 			if (!store) return current.getSuggestions(lines, cursorLine, cursorCol, options);
 			const index = store.index;
 			if (!index) return current.getSuggestions(lines, cursorLine, cursorCol, options);
-			const items = getItems(chain, index.files, options.force === true).slice(0, MAX_SUGGESTIONS);
+			const files = visibleFiles(index.files, vaults.getExcludedFolders(chain.keyword));
+			const items = getItems(chain, files, options.force === true).slice(0, MAX_SUGGESTIONS);
 			if (items.length === 0) return current.getSuggestions(lines, cursorLine, cursorCol, options);
 			return { prefix: span.raw, items };
 		},

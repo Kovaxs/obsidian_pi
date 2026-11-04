@@ -23,14 +23,20 @@ const contents = new Map([
 	["other note.md", "other text\n"],
 ]);
 
-function fixture(indexFiles = files) {
+function fixture(indexFiles = files, excludeFolders: string[] = []) {
 	const cli = new ObsidianCli(async (_command, args) => {
 		if (args[0] === "vaults") return execResult("vault\t/vault\n");
 		if (args[1] === "read") return execResult(contents.get(args[2]?.slice(5) ?? "") ?? "");
 		return execResult(`=> ${JSON.stringify(indexFiles)}\n`);
 	});
 	const store = new VaultIndexStore(cli, "vault");
-	return { cli, vaults: { getStore: (keyword: string) => (keyword === "obs" ? store : undefined) } };
+	return {
+		cli,
+		vaults: {
+			getStore: (keyword: string) => (keyword === "obs" || keyword === "all" ? store : undefined),
+			getExcludedFolders: (keyword: string) => (keyword === "obs" ? excludeFolders : undefined),
+		},
+	};
 }
 
 test("expands a file section with source citations and stops at the next sibling", async () => {
@@ -59,6 +65,33 @@ test("expands tags into several notes and reads each selected file once", async 
 	assert.match(result.text, /install text/);
 	assert.match(result.text, /other text/);
 	assert.equal(cli instanceof ObsidianCli, true);
+});
+
+test("excluded notes are never read through bare, tag, or explicit chains", async () => {
+	const hidden: VaultFile = {
+		path: "Fleeting Notes/deep/secret.md", mtime: 1, tags: ["#python", "#secret"], headings: [],
+	};
+	const { vaults } = fixture([...files, hidden], ["Fleeting Notes"]);
+	const reads: string[] = [];
+	const cli = new ObsidianCli(async (_command, args) => {
+		reads.push(args[2]?.slice(5) ?? "");
+		return execResult("note content");
+	});
+	for (const chain of ["@@obs", "@@obs+python"]) {
+		const result = await expandPrompt(chain, vaults, cli);
+		assert.equal(result.errors.length, 0);
+		assert.equal(result.changes[0]?.files, 2);
+		assert.doesNotMatch(result.text, /secret/);
+	}
+	for (const chain of ['@@obs@"Fleeting Notes/deep/secret"', "@@obs@secret", "@@obs+secret"]) {
+		const result = await expandPrompt(chain, vaults, cli);
+		assert.equal(result.text, chain);
+		assert.match(result.errors[0] ?? "", /no notes match/);
+	}
+	assert.ok(!reads.includes(hidden.path));
+	const all = await expandPrompt("@@all@secret", vaults, cli);
+	assert.equal(all.errors.length, 0);
+	assert.equal(reads.at(-1), hidden.path);
 });
 
 test("retains unresolved chains and returns an error", async () => {

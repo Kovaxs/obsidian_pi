@@ -20,9 +20,9 @@ const files: VaultFile[] = [
 	{ path: "networking.md", mtime: 2, tags: ["#networking/dns", "#networking/reverse-proxy"], headings: [] },
 ];
 
-async function fixture() {
+async function fixture(excludeFolders: string[] = [], indexFiles = files) {
 	const cli = new ObsidianCli(async (_command, args) => {
-		const stdout = args[0] === "vaults" ? "vault\t/vault\n" : `=> ${JSON.stringify(files)}\n`;
+		const stdout = args[0] === "vaults" ? "vault\t/vault\n" : `=> ${JSON.stringify(indexFiles)}\n`;
 		return {
 			stdout,
 			stderr: "",
@@ -34,7 +34,10 @@ async function fixture() {
 	const store = new VaultIndexStore(cli, "vault", { cacheDir: "/tmp/pi-obsidian-autocomplete-tests" });
 	await store.refresh();
 	store.stop();
-	return createObsidianAutocomplete(baseProvider(), { getStore: (keyword) => (keyword === "obs" ? store : undefined) });
+	return createObsidianAutocomplete(baseProvider(), {
+		getStore: (keyword) => (keyword === "obs" || keyword === "all" ? store : undefined),
+		getExcludedFolders: (keyword) => (keyword === "obs" ? excludeFolders : undefined),
+	});
 }
 
 test("suggests files with fuzzy matching and quoted insertion", async () => {
@@ -88,12 +91,35 @@ test("delegates non-vault autocomplete", async () => {
 	assert.equal(suggestions?.items[0]?.value, "delegated");
 });
 
+test("exclusions hide notes, tags, and headings while preserving an unrestricted alias", async () => {
+	const hidden: VaultFile = {
+		path: "Fleeting Notes/deep/secret.md",
+		mtime: 1,
+		tags: ["#secret", "#docker"],
+		headings: [[1, "Secret heading", 0]],
+	};
+	const provider = await fixture(["Fleeting Notes"], [...files, hidden]);
+	const options = { signal: new AbortController().signal, force: true };
+	for (const line of ["@@obs", "@@obs+", "@@obs#"]) {
+		const suggestions = await provider.getSuggestions([line], 0, line.length, options);
+		assert.ok(suggestions);
+		assert.ok(suggestions.items.every((item) => !/secret/i.test(`${item.label} ${item.description}`)));
+		if (line === "@@obs+") {
+			assert.equal(suggestions.items.find((item) => item.label === "docker")?.description, "1 note(s)");
+		}
+	}
+	for (const line of ["@@all", "@@all+", "@@all#"]) {
+		const suggestions = await provider.getSuggestions([line], 0, line.length, options);
+		assert.ok(suggestions?.items.some((item) => /secret/i.test(item.label)));
+	}
+});
+
 test("preserves slash-command completion through the real pi provider", async () => {
 	const current = new CombinedAutocompleteProvider(
 		[{ name: "reload" }, { name: "obsidian-setup" }],
 		process.cwd(),
 	);
-	const provider = createObsidianAutocomplete(current, { getStore: () => undefined });
+	const provider = createObsidianAutocomplete(current, { getStore: () => undefined, getExcludedFolders: () => undefined });
 	for (const line of ["/", "/rel", "  /rel", "/obsidian-s"]) {
 		const suggestions = await provider.getSuggestions([line], 0, line.length, {
 			signal: new AbortController().signal,
@@ -114,7 +140,7 @@ test("delegates command arguments and file attachment insertion", async () => {
 		[{ name: "deploy", getArgumentCompletions: () => [{ value: "production", label: "production" }] }],
 		process.cwd(),
 	);
-	const provider = createObsidianAutocomplete(current, { getStore: () => undefined });
+	const provider = createObsidianAutocomplete(current, { getStore: () => undefined, getExcludedFolders: () => undefined });
 	const line = "/deploy pro";
 	const suggestions = await provider.getSuggestions([line], 0, line.length, {
 		signal: new AbortController().signal,
