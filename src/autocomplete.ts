@@ -10,6 +10,7 @@ import {
 	type Selection,
 } from "./stages.ts";
 import type { VaultIndexStore } from "./vault-index.ts";
+import type { VaultFile } from "./types.ts";
 
 const MAX_SUGGESTIONS = 30;
 
@@ -57,7 +58,7 @@ export function createObsidianAutocomplete(
 	};
 }
 
-function getItems(chain: Chain, files: import("./types.ts").VaultFile[], force: boolean): AutocompleteItem[] {
+function getItems(chain: Chain, files: VaultFile[], force: boolean): AutocompleteItem[] {
 	const active = chain.segments.at(-1);
 	if (!active) return fileItems({ files, sectionPath: [] }, "", chain);
 	const completed = chain.segments.slice(0, -1);

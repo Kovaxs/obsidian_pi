@@ -88,6 +88,42 @@ test("caps UTF-8 note content and marks truncation", async () => {
 	assert.equal(cli instanceof ObsidianCli, true);
 });
 
+test("applies the byte cap separately to each note", async () => {
+	const large = [
+		{ ...files[1]!, path: "large-a.md" },
+		{ ...files[1]!, path: "large-b.md" },
+	];
+	const { vaults } = fixture(large);
+	const largeCli = new ObsidianCli(async () => execResult("x".repeat(100)));
+	const result = await expandPrompt("@@obs+python", vaults, largeCli, {
+		maxNoteBytes: 20,
+		maxChainBytes: 1_000,
+	});
+	assert.equal(result.changes[0]?.blocks, 2);
+	assert.match(result.text, /x{20}/);
+	assert.doesNotMatch(result.text, /x{21}/);
+});
+
+test("stops reading notes after the chain cap", async () => {
+	const large = [
+		{ ...files[1]!, path: "large-a.md" },
+		{ ...files[1]!, path: "large-b.md" },
+		{ ...files[1]!, path: "large-c.md" },
+	];
+	const { vaults } = fixture(large);
+	let reads = 0;
+	const largeCli = new ObsidianCli(async () => {
+		reads += 1;
+		return execResult("x".repeat(100));
+	});
+	const result = await expandPrompt("@@obs+python", vaults, largeCli, {
+		maxNoteBytes: 100,
+		maxChainBytes: 150,
+	});
+	assert.equal(result.changes[0]?.truncated, true);
+	assert.ok(reads < large.length);
+});
+
 function execResult(stdout: string) {
 	return { stdout, stderr: "", code: 0, killed: false, truncated: false };
 }

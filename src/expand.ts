@@ -2,7 +2,7 @@ import { findChainSpans, parseChain } from "./chain.ts";
 import type { ObsidianCli } from "./obsidian-cli.ts";
 import { findHeadingNodes, runStages } from "./stages.ts";
 import type { VaultIndexStore } from "./vault-index.ts";
-import type { Heading, VaultFile, VaultIndex } from "./types.ts";
+import type { Heading, VaultFile } from "./types.ts";
 
 export const DEFAULT_MAX_NOTE_BYTES = 50_000;
 export const DEFAULT_MAX_CHAIN_BYTES = 100_000;
@@ -78,35 +78,35 @@ async function expandChain(
 	const selection = runStages(index.files, chain.segments);
 	if (selection.files.length === 0) throw new Error("no notes match this chain");
 
-	const contentCache = new Map<string, string>();
-	const blocks: ExpansionBlock[] = [];
-	for (const file of selection.files) {
-		let content = contentCache.get(file.path);
-		if (content === undefined) {
-			content = await cli.readNote(index.vault, file.path);
-			contentCache.set(file.path, content);
-		}
-		blocks.push(...selectFileBlocks(file, content, selection.sectionPath));
-	}
-
 	const maxNoteBytes = options.maxNoteBytes ?? DEFAULT_MAX_NOTE_BYTES;
 	const maxChainBytes = options.maxChainBytes ?? DEFAULT_MAX_CHAIN_BYTES;
-	let remainingNoteBytes = maxNoteBytes;
 	let chainBytes = 0;
 	let truncated = false;
 	const rendered: string[] = [];
-	for (const block of blocks) {
-		const header = renderHeader(raw, block);
-		const limit = Math.min(remainingNoteBytes, Math.max(0, maxChainBytes - chainBytes - byteLength(header)));
-		const content = truncateUtf8(block.text, limit);
-		truncated ||= content.truncated;
-		remainingNoteBytes = Math.max(0, remainingNoteBytes - byteLength(block.text));
-		const renderedBlock = `${header}${content.text}\n[End Obsidian note]`;
-		rendered.push(renderedBlock);
-		chainBytes += byteLength(renderedBlock);
-		if (chainBytes >= maxChainBytes) {
-			if (blocks.indexOf(block) < blocks.length - 1) truncated = true;
-			break;
+
+	outer: for (const file of selection.files) {
+		const content = await cli.readNote(index.vault, file.path);
+		let noteBytes = 0;
+		for (const block of selectFileBlocks(file, content, selection.sectionPath)) {
+			const header = renderHeader(raw, block);
+			const endMarker = "\n[End Obsidian note]";
+			const available = maxChainBytes - chainBytes - byteLength(header) - byteLength(endMarker);
+			if (available <= 0 || noteBytes >= maxNoteBytes) {
+				truncated = true;
+				break outer;
+			}
+			const limit = Math.min(maxNoteBytes - noteBytes, available);
+			const truncatedContent = truncateUtf8(block.text, limit);
+			truncated ||= truncatedContent.truncated;
+			noteBytes += byteLength(truncatedContent.text);
+			const renderedBlock = `${header}${truncatedContent.text}${endMarker}`;
+			rendered.push(renderedBlock);
+			chainBytes += byteLength(renderedBlock);
+			if (truncatedContent.truncated) break;
+			if (chainBytes >= maxChainBytes) {
+				truncated = true;
+				break outer;
+			}
 		}
 	}
 

@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ObsidianCli } from "./obsidian-cli.ts";
 import type { VaultIndex } from "./types.ts";
 
@@ -147,7 +147,7 @@ export class VaultIndexStore {
 }
 
 async function writeCache(path: string, index: VaultIndex): Promise<void> {
-	await mkdir(join(path, ".."), { recursive: true });
+	await mkdir(dirname(path), { recursive: true });
 	const temporary = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
 	await writeFile(temporary, `${JSON.stringify(index)}\n`, "utf8");
 	await rename(temporary, path);
